@@ -3,6 +3,14 @@
 **作者:** 从前跟你一样
 **版本:** 1.0.0
 
+> **本仓库说明（低调改版）**
+> 本仓库由 **[@lcjwa090-afk](https://github.com/lcjwa090-afk)** 在原版基础上做了一份低调改版：
+> 新增「本地生图 (LocalDream)」支持 —— 开启后 SD 生图直连手机本地生图 App（http://127.0.0.1:8081），
+> 不再需要 sdwebui。开关关掉时行为与原版完全一致。
+>
+> 原作者 **从前跟你一样**（[@damoshen123](https://github.com/damoshen123)）的署名、版权声明与授权协议（Aladdin Free Public License）
+> 一律保留、未做改动。原仓库：https://github.com/damoshen123/st-chatu8
+
 这是一个为 [SillyTavern](https://github.com/SillyTavern/SillyTavern) 设计的第三方扩展，它将强大的文生图功能无缝集成到您的聊天体验中。通过简单的标记，您可以在对话中直接调用 Stable Diffusion、NovelAI 或 ComfyUI，将文字描述变为生动的图像。
 
 ## ✨ 功能
