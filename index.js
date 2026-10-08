@@ -2689,6 +2689,11 @@ var init_config = __esm({
       sd_cdenoising_strength: "0.7",
       sd_cclip_skip: "2",
       sd_cadetailer: "false",
+      // ===== 本地生图 (LocalDream / 手机 App 8081) =====
+      localdream_mode: "false",
+      localdream_sampler: "dpm_sde",
+      localdream_karras: "true",
+      localdream_res_mode: "size",
       restoreFaces: "false",
       sd_cchatu_8_samplerName: "DPM++ 2M",
       comfyuisamplerName: "\u8FDE\u63A5\u540E\u9009\u62E9",
@@ -79972,7 +79977,9 @@ async function generateSDImage({ prompt: link, width: Xwidth, height: Xheight, c
   extension_settings58["sd"]["auto_url"] = url;
   await saveSettingsDebounced33();
   try {
-    if (extension_settingss.client === "jiuguan") {
+    if (isLocalDreamMode()) {
+      addLog("\u672C\u5730\u751F\u56FE (LocalDream) \u6A21\u5F0F\uFF1A\u8DF3\u8FC7 sdwebui \u6A21\u578B\u83B7\u53D6\u4E0E\u5207\u6362\u3002");
+    } else if (extension_settingss.client === "jiuguan") {
       const readmodel = await fetch("/api/sd/get-model", {
         method: "POST",
         body: JSON.stringify({
@@ -80116,6 +80123,9 @@ async function generateSDImage({ prompt: link, width: Xwidth, height: Xheight, c
       addLog("\u4EFB\u52A1\u5DF2\u88AB\u7528\u6237\u53D6\u6D88\u3002");
       throw new Error("\u4EFB\u52A1\u5DF2\u53D6\u6D88");
     }
+    if (isLocalDreamMode()) {
+      return await finishLocalDreamGeneration(payload, change_, _sd_gen_params, taskId);
+    }
     if (extension_settingss.client === "jiuguan") {
       payload.url = url;
       console.log("payst_chatu8_sd_authload", extension_settingss.st_chatu8_sd_auth);
@@ -80198,6 +80208,185 @@ async function generateSDImage({ prompt: link, width: Xwidth, height: Xheight, c
       releaseSerialLock(taskId, interval);
     }
   }
+}
+// ==========================================================================
+// 【本地生图 LocalDream（手机 App 8081）支持】
+// 协议与「手机本地生图」酒馆助手脚本一致：
+//   GET  {base}/            → 健康检查
+//   POST {base}/generate    → SSE 流式生成
+//        body: { prompt, negative_prompt, steps, cfg, scheduler, denoise_strength,
+//                show_diffusion_process, size | width+height | aspect_ratio, seed? }
+//        事件: {type:"progress", step, total_steps}
+//              {type:"complete", image(RGB 裸数据 base64), width, height, seed, generation_time_ms}
+//              {type:"error", message}
+// ==========================================================================
+const LD_DEFAULT_NEGATIVE = "low quality, bad anatomy, ugly, deformed, distorted, blurry, noisy, artifacts, lowres, watermark";
+
+function isLocalDreamMode() {
+  try {
+    return String(extension_settings58[extensionName]?.localdream_mode) === "true";
+  } catch (e) {
+    return false;
+  }
+}
+function localDreamBaseUrl() {
+  const raw = String(extension_settings58[extensionName]?.sdUrl || "").trim();
+  return removeTrailingSlash(raw);
+}
+function localDreamScheduler() {
+  const s = extension_settings58[extensionName] || {};
+  const base = String(s.localdream_sampler || "dpm_sde").trim() || "dpm_sde";
+  const useKarras = isSettingTrue2(s.localdream_karras);
+  if (!useKarras || base === "lcm" || base.endsWith("_karras")) return base;
+  return base + "_karras";
+}
+function localDreamAspectRatio(width, height) {
+  const w = Math.max(1, Math.round(Number(width) || 1));
+  const h = Math.max(1, Math.round(Number(height) || 1));
+  const gcd = (a, b) => b ? gcd(b, a % b) : a;
+  const g = gcd(w, h) || 1;
+  return `${Math.round(w / g)}:${Math.round(h / g)}`;
+}
+function localDreamRgbToDataUrl(base64Raw, w, h) {
+  return new Promise((resolve, reject) => {
+    try {
+      const binary = atob(String(base64Raw || ""));
+      // 兼容：若 App 直接返回 PNG/JPEG 的 base64（而非 RGB 裸数据），原样转成 data URL
+      if (binary.startsWith("\x89PNG")) {
+        resolve(`data:image/png;base64,${String(base64Raw).replace(/\s/g, "")}`);
+        return;
+      }
+      if (binary.startsWith("\xFF\xD8")) {
+        resolve(`data:image/jpeg;base64,${String(base64Raw).replace(/\s/g, "")}`);
+        return;
+      }
+      const rgb = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) rgb[i] = binary.charCodeAt(i);
+      const width = Number(w) || 0;
+      const height = Number(h) || 0;
+      if (!width || !height) throw new Error("LocalDream 未返回图片尺寸");
+      if (rgb.length < width * height * 3) throw new Error(`LocalDream RGB 数据长度异常 (${rgb.length} 字节, 期望 ${width * height * 3})`);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      const imgData = ctx.createImageData(width, height);
+      for (let i = 0; i < width * height; i++) {
+        imgData.data[i * 4] = rgb[i * 3];
+        imgData.data[i * 4 + 1] = rgb[i * 3 + 1];
+        imgData.data[i * 4 + 2] = rgb[i * 3 + 2];
+        imgData.data[i * 4 + 3] = 255;
+      }
+      ctx.putImageData(imgData, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+async function requestLocalDreamImage(ldPayload) {
+  const base = localDreamBaseUrl();
+  if (!base) throw new Error("未填写本地生图 API 地址（请在上方「API 地址」填 http://127.0.0.1:8081）");
+  const response = await fetch(base + "/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+    body: JSON.stringify(ldPayload)
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    addLog(`LocalDream 返回错误。状态码: ${response.status}。响应内容: ${errorText}`);
+    throw new Error(`LocalDream 请求失败, 状态码: ${response.status}, 详情: ${errorText}`);
+  }
+  if (!response.body) throw new Error("LocalDream 响应没有可读数据流");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let finalEvent = null;
+  const handleEvent = (evt) => {
+    if (!evt || typeof evt !== "object") return;
+    if (evt.type === "progress") {
+      addLog(`本地生图进度: ${evt.step}/${evt.total_steps}`);
+    } else if (evt.type === "complete") {
+      finalEvent = evt;
+    } else if (evt.type === "error") {
+      throw new Error(evt.message || "LocalDream 生成失败");
+    }
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const str = trimmed.slice(5).trim();
+      if (!str || str === "[DONE]") continue;
+      let evt;
+      try {
+        evt = JSON.parse(str);
+      } catch (e) {
+        continue;
+      }
+      handleEvent(evt);
+    }
+  }
+  if (!finalEvent && buffer.trim()) {
+    try {
+      handleEvent(JSON.parse(buffer.trim().replace(/^data:\s*/, "")));
+    } catch (e) {
+    }
+  }
+  if (!finalEvent) throw new Error("LocalDream 未返回完整图像数据");
+  if (!finalEvent.image) throw new Error("LocalDream 返回数据缺少 image 字段");
+  const imageUrl = await localDreamRgbToDataUrl(finalEvent.image, finalEvent.width, finalEvent.height);
+  return {
+    image: imageUrl,
+    width: finalEvent.width,
+    height: finalEvent.height,
+    seed: finalEvent.seed,
+    generation_time_ms: finalEvent.generation_time_ms
+  };
+}
+async function finishLocalDreamGeneration(payload, change_, _sd_gen_params, taskId) {
+  const s = extension_settings58[extensionName] || {};
+  const width = Number(payload.width) || 512;
+  const height = Number(payload.height) || 512;
+  const ldPayload = {
+    prompt: payload.prompt,
+    negative_prompt: String(payload.negative_prompt || "").trim() || LD_DEFAULT_NEGATIVE,
+    steps: Number(payload.steps) || 20,
+    cfg: Number(payload.cfg_scale) || 7,
+    scheduler: localDreamScheduler(),
+    denoise_strength: 1,
+    show_diffusion_process: false
+  };
+  const resMode = String(s.localdream_res_mode || "size");
+  if (resMode === "wh") {
+    ldPayload.width = width;
+    ldPayload.height = height;
+  } else if (resMode === "aspect") {
+    ldPayload.aspect_ratio = localDreamAspectRatio(width, height);
+  } else {
+    ldPayload.size = width;
+  }
+  if (Number(payload.seed) >= 0) ldPayload.seed = Number(payload.seed);
+  addLog(`本地生图 (LocalDream) 请求参数: ${JSON.stringify(ldPayload)}`);
+  const startTime = Date.now();
+  const result = await requestLocalDreamImage(ldPayload);
+  let imageUrl = result.image;
+  const duration = ((Date.now() - startTime) / 1e3).toFixed(1);
+  addLog(`本地生图完成并格式化为 data URL (耗时 ${duration} 秒, ${result.width}x${result.height}, seed=${result.seed ?? "未知"})。`);
+  taskQueue.completeTask(taskId, true);
+  if (!isPluginToastDisabled()) {
+    toastr.success(`✅ 本地生图完成，耗时 ${duration} 秒`);
+  }
+  currentTaskId4 = null;
+  if (String(s.convertToJpegStorage) === "true") {
+    imageUrl = await convertImageToJpeg(imageUrl);
+  }
+  return { image: imageUrl, change: change_ || "", genParams: _sd_gen_params };
 }
 async function sdGenerate(requestData) {
   const { id, prompt: prompt2, width, height, change, negative_prompt: extraNegativePrompt } = requestData;
@@ -89367,6 +89556,26 @@ async function testSd() {
   const baseUrl = removeTrailingSlash(el.value);
   if (!isValidUrl(baseUrl)) {
     alert("\u8BF7\u8F93\u5165\u6709\u6548\u7684 Stable Diffusion API \u5730\u5740\u3002");
+    return;
+  }
+  if (isLocalDreamMode()) {
+    let reachable = false;
+    let detail = "";
+    try {
+      const probe = await fetch(baseUrl + "/", { method: "GET" });
+      reachable = true;
+      detail = `HTTP ${probe.status}`;
+    } catch (error) {
+      detail = error?.message || String(error);
+    }
+    if (reachable) {
+      alert(`连接成功：LocalDream 本地生图服务在线（${detail}）。`);
+      addLog(`LocalDream 测试链接成功网址:${baseUrl} (${detail})`);
+    } else {
+      alert(`LocalDream 连接测试失败，请检查地址、生图 App 是否开启（注意别被系统省电杀掉）。\n错误: ${detail}`);
+      addLog(`LocalDream 测试链接失败网址:${baseUrl} 错误详情:${JSON.stringify(detail)}`);
+    }
+    window.loadSilterTavernChatu8Settings();
     return;
   }
   if (settings3.client == "jiuguan") {
@@ -110846,7 +111055,7 @@ async function initUI({ check_update: check_update2 }) {
       settings2.theme_id = "\u9ED8\u8BA4-\u767D\u5929";
     }
     applyTheme(settings2.themes[settings2.theme_id]);
-    const mainKeys = ["scriptEnabled", "helpTipsEnabled", "disablePluginToast", "newlineFixEnabled", "mode", "client", "displayMode", "heavyFrontendMode", "insertOriginalText", "dbclike", "collapseImage", "zidongdianji", "zidongdianji2", "longPressToEdit", "clickToPreview", "startTag", "endTag", "cache", "sdUrl", "st_chatu8_sd_auth", "comfyuiUrl", "comfyui_max_concurrency", "comfyui_timeout", "novelaiApi", "novelaisite", "novelaiOtherSite", "enableCloudQueue", "cloudQueueUrl", "cloudQueueGreeting", "showQueueGreeting", "novelaimode", "novelai_sampler", "Schedule", "nai3Scale", "cfg_rescale", "AI_use_coords", "sm", "dyn", "nai3Variety", "nai3Deceisp", "sd_cwidth", "sd_cheight", "sd_csteps", "sd_cseed", "sdCfgScale", "restoreFaces", "novelai_width", "novelai_height", "novelai_steps", "novelai_seed", "nai3VibeTransfer", "enableVibeGroupTransfer", "randomVibeGroup", "normalizeRefStrength", "InformationExtracted", "ReferenceStrength", "nai3CharRef", "nai3StylePerception", "comfyui_width", "comfyui_height", "comfyui_steps", "comfyui_seed", "cfg_comfyui", "worker", "ipa", "c_fenwei", "c_xijie", "c_quanzhong", "c_idquanzhong", "AQT_sd", "UCP_sd", "AQT_novelai", "UCP_novelai", "AQT_comfyui", "UCP_comfyui", "addFurryDataset", "sd_cupscale_factor", "sd_chires_fix", "sd_chires_steps", "sd_cdenoising_strength", "sd_cclip_skip", "sd_cadetailer", "worldBookEnabled", "ai_temperature", "ai_top_p", "ai_presence_penalty", "ai_frequency_penalty", "ai_stream", "ai_private", "ai_token", "vocabulary_search_startswith", "vocabulary_search_limit", "vocabulary_search_sort", "enablePregen", "autoLLMImageGen", "randomYushe", "aiAutonomousResolution", "videoChannel", "imageAlignment", "imageSizeScale", "imageGenInterval", "translation_system_prompt", "ai_test_system", "ai_test_user", "ai_test_output", "jiuguanchucun", "vibeJiuguanchucun", "convertToJpegStorage", "weilin_lora_fix"];
+    const mainKeys = ["scriptEnabled", "helpTipsEnabled", "disablePluginToast", "newlineFixEnabled", "mode", "client", "displayMode", "heavyFrontendMode", "insertOriginalText", "dbclike", "collapseImage", "zidongdianji", "zidongdianji2", "longPressToEdit", "clickToPreview", "startTag", "endTag", "cache", "sdUrl", "st_chatu8_sd_auth", "localdream_mode", "localdream_sampler", "localdream_karras", "localdream_res_mode", "comfyuiUrl", "comfyui_max_concurrency", "comfyui_timeout", "novelaiApi", "novelaisite", "novelaiOtherSite", "enableCloudQueue", "cloudQueueUrl", "cloudQueueGreeting", "showQueueGreeting", "novelaimode", "novelai_sampler", "Schedule", "nai3Scale", "cfg_rescale", "AI_use_coords", "sm", "dyn", "nai3Variety", "nai3Deceisp", "sd_cwidth", "sd_cheight", "sd_csteps", "sd_cseed", "sdCfgScale", "restoreFaces", "novelai_width", "novelai_height", "novelai_steps", "novelai_seed", "nai3VibeTransfer", "enableVibeGroupTransfer", "randomVibeGroup", "normalizeRefStrength", "InformationExtracted", "ReferenceStrength", "nai3CharRef", "nai3StylePerception", "comfyui_width", "comfyui_height", "comfyui_steps", "comfyui_seed", "cfg_comfyui", "worker", "ipa", "c_fenwei", "c_xijie", "c_quanzhong", "c_idquanzhong", "AQT_sd", "UCP_sd", "AQT_novelai", "UCP_novelai", "AQT_comfyui", "UCP_comfyui", "addFurryDataset", "sd_cupscale_factor", "sd_chires_fix", "sd_chires_steps", "sd_cdenoising_strength", "sd_cclip_skip", "sd_cadetailer", "worldBookEnabled", "ai_temperature", "ai_top_p", "ai_presence_penalty", "ai_frequency_penalty", "ai_stream", "ai_private", "ai_token", "vocabulary_search_startswith", "vocabulary_search_limit", "vocabulary_search_sort", "enablePregen", "autoLLMImageGen", "randomYushe", "aiAutonomousResolution", "videoChannel", "imageAlignment", "imageSizeScale", "imageGenInterval", "translation_system_prompt", "ai_test_system", "ai_test_user", "ai_test_output", "jiuguanchucun", "vibeJiuguanchucun", "convertToJpegStorage", "weilin_lora_fix"];
     mainKeys.forEach((key) => {
       const element = document.getElementById(key);
       if (element) {
