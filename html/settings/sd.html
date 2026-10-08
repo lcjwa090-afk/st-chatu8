@@ -161,6 +161,51 @@
             <input type="text" id="st_chatu8_sd_auth" class="st-chatu8-text-input" placeholder="例： 用户名:密码">
         </div>
     </div>
+    <!-- ====== 本地生图 LocalDream（手机 App 8081） ====== -->
+    <div class="st-chatu8-settings-section">
+        <h3>本地生图 (LocalDream)</h3>
+        <div class="st-chatu8-field">
+            <label for="localdream_mode">启用本地生图</label>
+            <div class="st-chatu8-toggle">
+                <input id="localdream_mode" type="checkbox"/>
+                <span class="st-chatu8-slider"></span>
+            </div>
+        </div>
+        <div class="st-chatu8-field" style="display:block;">
+            <div style="font-size:12px; opacity:.75; line-height:1.7;">
+                开启后，上方「模式」选 <b>Stable Diffusion</b> 时不再请求 sdwebui，而是把请求发到「API 地址」的
+                <code>/generate</code> 接口（地址填 <code>http://127.0.0.1:8081</code>）。<br/>
+                步数 / CFG / 宽高 / 种子沿用下面「生成参数」里的设置，负面提示词沿用「提示词预设」的负面词；<br/>
+                高清修复、ADetailer、VAE、片段跳过在本地模式下不生效。
+            </div>
+        </div>
+        <div class="st-chatu8-field">
+            <label for="localdream_sampler">本地采样器</label>
+            <input type="text" id="localdream_sampler" class="st-chatu8-text-input" list="localdream_sampler_list" placeholder="dpm_sde">
+            <datalist id="localdream_sampler_list">
+                <option value="dpm_sde"></option>
+                <option value="dpm"></option>
+                <option value="euler_a"></option>
+                <option value="euler"></option>
+                <option value="lcm"></option>
+            </datalist>
+        </div>
+        <div class="st-chatu8-field">
+            <label for="localdream_karras">Karras 调度</label>
+            <div class="st-chatu8-toggle">
+                <input id="localdream_karras" type="checkbox"/>
+                <span class="st-chatu8-slider"></span>
+            </div>
+        </div>
+        <div class="st-chatu8-field">
+            <label for="localdream_res_mode">尺寸传递方式</label>
+            <select id="localdream_res_mode" class="st-chatu8-select">
+                <option value="size">按宽度 size（推荐）</option>
+                <option value="wh">按宽高 width/height</option>
+                <option value="aspect">按比例 aspect_ratio</option>
+            </select>
+        </div>
+    </div>
     <div class="st-chatu8-settings-section">
         <h3>模型与采样设置</h3>
         <div class="st-chatu8-field">
