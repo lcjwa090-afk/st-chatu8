@@ -161,9 +161,10 @@
             <input type="text" id="st_chatu8_sd_auth" class="st-chatu8-text-input" placeholder="例： 用户名:密码">
         </div>
     </div>
-    <!-- ====== 本地生图 LocalDream（手机 App 8081） ====== -->
+
+    <!-- ====== 本地生图 LocalDream (8081) / Nightmare (8820) ====== -->
     <div class="st-chatu8-settings-section">
-        <h3>本地生图 (LocalDream / FancyAI)</h3>
+        <h3>本地端侧生图 (LocalDream / Nightmare)</h3>
         <div class="st-chatu8-field">
             <label for="localdream_mode">启用本地生图</label>
             <div class="st-chatu8-toggle">
@@ -175,15 +176,26 @@
             <label for="localdream_engine">本地引擎选择</label>
             <select id="localdream_engine" class="st-chatu8-select">
                 <option value="localdream">LocalDream (默认端口 8081)</option>
-                <option value="fancyai">FancyAI Aura LAN (默认端口 7861)</option>
+                <option value="nightmare">Nightmare (NM模式 / 默认端口 8820)</option>
             </select>
         </div>
-        <div class="st-chatu8-field" style="display:block;">
-            <div style="font-size:12px; opacity:.75; line-height:1.7;">
-                开启后，上方「模式」选 <b>Stable Diffusion</b> 时不再请求远程 sdwebui，而是直接请求手机本地生图服务：<br/>
-                • <b>LocalDream</b>：地址填 <code>http://127.0.0.1:8081</code>，步数/CFG/采样器在下方生效。<br/>
-                • <b>FancyAI</b>：地址填 <code>http://127.0.0.1:7861</code>，需在 FancyAI App 的 Aura 设置开启「Aura LAN 共享」。模型/步数/CFG/画质由 FancyAI 内部预设控制。<br/>
+        <div class="st-chatu8-field">
+            <label for="localdream_override_params">覆盖 App 画布参数</label>
+            <div class="st-chatu8-toggle">
+                <input id="localdream_override_params" type="checkbox" checked/>
+                <span class="st-chatu8-slider"></span>
             </div>
+        </div>
+        <div class="st-chatu8-field" style="display:block;">
+            <div style="font-size:12px; opacity:.8; line-height:1.7;">
+                <b>• 开启（方法1·推荐）：</b>步数 / CFG / 宽高尺寸 / 采样器严格按照下方酒馆「生成参数」覆盖执行。<br/>
+                <b>• 关闭（方法2·纯工作流）：</b>完全使用手机 App 当前画布/工作流节点的预设参数，酒馆仅推送对话提示词。<br/>
+                <b>• NM 地址说明：</b>Nightmare 打开 Settings → API 开关后，地址填 <code>http://127.0.0.1:8820</code>；若 App 内未设密码，下方 Token 留空即可。
+            </div>
+        </div>
+        <div class="st-chatu8-field">
+            <label for="localdream_nm_token">NM API 访问密码 (Token)</label>
+            <input type="password" id="localdream_nm_token" class="st-chatu8-text-input" placeholder="Nightmare 未设置密码请留空">
         </div>
         <div class="st-chatu8-field">
             <label for="localdream_sampler">本地采样器</label>
@@ -207,8 +219,8 @@
             <label for="localdream_res_mode">尺寸传递方式</label>
             <select id="localdream_res_mode" class="st-chatu8-select">
                 <option value="size">按宽度 size（推荐）</option>
-                <option value="wh">按宽高 width/height</option>
-                <option value="aspect">按比例 aspect_ratio</option>
+                <option value="wh">分别指定 width / height</option>
+                <option value="aspect">按长宽比 aspect_ratio</option>
             </select>
         </div>
     </div>
