@@ -163,7 +163,7 @@
     </div>
     <!-- ====== 本地生图 LocalDream（手机 App 8081） ====== -->
     <div class="st-chatu8-settings-section">
-        <h3>本地生图 (LocalDream)</h3>
+        <h3>本地生图 (LocalDream / FancyAI)</h3>
         <div class="st-chatu8-field">
             <label for="localdream_mode">启用本地生图</label>
             <div class="st-chatu8-toggle">
@@ -171,12 +171,18 @@
                 <span class="st-chatu8-slider"></span>
             </div>
         </div>
+        <div class="st-chatu8-field">
+            <label for="localdream_engine">本地引擎选择</label>
+            <select id="localdream_engine" class="st-chatu8-select">
+                <option value="localdream">LocalDream (默认端口 8081)</option>
+                <option value="fancyai">FancyAI Aura LAN (默认端口 7861)</option>
+            </select>
+        </div>
         <div class="st-chatu8-field" style="display:block;">
             <div style="font-size:12px; opacity:.75; line-height:1.7;">
-                开启后，上方「模式」选 <b>Stable Diffusion</b> 时不再请求 sdwebui，而是把请求发到「API 地址」的
-                <code>/generate</code> 接口（地址填 <code>http://127.0.0.1:8081</code>）。<br/>
-                步数 / CFG / 宽高 / 种子沿用下面「生成参数」里的设置，负面提示词沿用「提示词预设」的负面词；<br/>
-                高清修复、ADetailer、VAE、片段跳过在本地模式下不生效。
+                开启后，上方「模式」选 <b>Stable Diffusion</b> 时不再请求远程 sdwebui，而是直接请求手机本地生图服务：<br/>
+                • <b>LocalDream</b>：地址填 <code>http://127.0.0.1:8081</code>，步数/CFG/采样器在下方生效。<br/>
+                • <b>FancyAI</b>：地址填 <code>http://127.0.0.1:7861</code>，需在 FancyAI App 的 Aura 设置开启「Aura LAN 共享」。模型/步数/CFG/画质由 FancyAI 内部预设控制。<br/>
             </div>
         </div>
         <div class="st-chatu8-field">
