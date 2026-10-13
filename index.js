@@ -80094,22 +80094,29 @@ async function finishLocalDreamGeneration(payload, change_, _sd_gen_params, task
 // Nightmare (NM模式 / 8820) 核心适配实现
 // ==========================================================================
 async function requestNightmareImage(baseUrl, token, payload, overrideParams, taskId) {
-  const headers = { "Content-Type": "application/json", "Accept": "text/event-stream, application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  // 注意：为避免手机浏览器对跨域 POST 强制触发 OPTIONS 预检请求（Nightmare 简易服务未实现 OPTIONS），
+  // 1. Token 统一通过 URL Query (?token=...) 传递
+  // 2. Content-Type 采用 text/plain（简单请求，直接放行直通）
+  const headers = { "Content-Type": "text/plain" };
 
+  // 严格遵循 Nightmare 原生 API 协议校验规范：
+  // 1. 必须包含 "flow": "current"（运行当前手机画布上的工作流）
+  // 2. 负向提示词字段为 "negative"（Nightmare 不识别 negative_prompt）
   const runBody = {
+    flow: "current",
     prompt: payload.prompt,
-    negative_prompt: String(payload.negative_prompt || "").trim() || LD_DEFAULT_NEGATIVE
+    negative: String(payload.negative_prompt || "").trim() || LD_DEFAULT_NEGATIVE
   };
 
-  // 方法 1：覆盖 App 画布参数（开启）
+  // 方法 1：覆盖 App 画布参数（开启），Nightmare 规定必须放在 params 对象中
   if (overrideParams) {
-    runBody.steps = Number(payload.steps) || 20;
-    runBody.cfg = Number(payload.cfg_scale) || 7;
-    runBody.width = Number(payload.width) || 512;
-    runBody.height = Number(payload.height) || 512;
-    if (Number(payload.seed) >= 0) runBody.seed = Number(payload.seed);
-    runBody.scheduler = localDreamScheduler();
+    runBody.params = {
+      steps: Number(payload.steps) || 20,
+      cfg: Number(payload.cfg_scale) || 7,
+      width: Number(payload.width) || 512,
+      height: Number(payload.height) || 512
+    };
+    if (Number(payload.seed) >= 0) runBody.params.seed = Number(payload.seed);
     addLog(`[Nightmare] 方法1（酒馆参数优先覆盖）：${JSON.stringify(runBody)}`);
   } else {
     // 方法 2：纯工作流模式（关闭），完全沿用 Nightmare 手机端画布节点设定的步数/尺寸/模型
@@ -80121,6 +80128,13 @@ async function requestNightmareImage(baseUrl, token, payload, overrideParams, ta
   // Nightmare 真实端点为 /run
   let runUrl = `${baseUrl}/run${tokenQuery}`;
   let response = await fetch(runUrl, { method: "POST", headers, body: JSON.stringify(runBody) }).catch(() => null);
+
+  // 若带 text/plain 的 POST 被极特殊策略拦截，自动重试简单 POST
+  if (!response || !response.ok) {
+    if (!response) {
+      response = await fetch(runUrl, { method: "POST", body: JSON.stringify(runBody) }).catch(() => null);
+    }
+  }
 
   // 若 /run 404，回退探测 /api/run 与 /generate?stream=1
   if (!response || !response.ok) {
