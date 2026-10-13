@@ -79918,7 +79918,7 @@ function isLocalDreamMode() {
   try {
     const rawUrl = String(document.getElementById("sdUrl")?.value || getChatu8Settings()?.sdUrl || "").trim();
     // 智能识别：若地址包含 8820 (Nightmare) 或 8081 (LocalDream)，自动识别并接管本地生图
-    if (rawUrl.includes(":8820") || rawUrl.includes(":8081")) return true;
+    if (rawUrl.includes(":8820") || rawUrl.includes(":8821") || rawUrl.includes(":8081")) return true;
     const domEl = document.getElementById("localdream_mode");
     if (domEl && domEl.checked) return true;
     const v = getChatu8Settings()?.localdream_mode;
@@ -79931,7 +79931,7 @@ function isLocalDreamMode() {
 function localDreamEngine() {
   try {
     const rawUrl = String(document.getElementById("sdUrl")?.value || getChatu8Settings()?.sdUrl || "").trim();
-    if (rawUrl.includes(":8820")) return "nightmare";
+    if (rawUrl.includes(":8820") || rawUrl.includes(":8821")) return "nightmare";
     if (rawUrl.includes(":8081")) return "localdream";
     const domEl = document.getElementById("localdream_engine");
     if (domEl && domEl.value) return String(domEl.value).toLowerCase();
@@ -80180,14 +80180,103 @@ async function requestNightmareImage(baseUrl, token, payload, overrideParams, ta
     if (response && response.ok) break;
   }
 
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`Nightmare 请求失败 (HTTP ${response.status}): ${errorText}`);
+  if (!response || !response.ok) {
+    const errorText = response ? await response.text().catch(() => "") : "无法连接到服务器";
+    throw new Error(`Nightmare 请求失败 (HTTP ${response?.status || 0}): ${errorText}`);
   }
 
   let finalImageUrl = null;
-  let finalWidth = runBody.width || 512;
-  let finalHeight = runBody.height || 512;
+  let finalWidth = runBody.params?.width || 512;
+  let finalHeight = runBody.params?.height || 512;
+
+  // 内部辅助函数：从 URL 抓取并转化为 Base64 Data URL
+  async function fetchImageAsBase64(imgUrl) {
+    try {
+      const parsed = new URL(imgUrl, activeBaseUrl);
+      if (token && !parsed.searchParams.has("token")) {
+        parsed.searchParams.set("token", token);
+      }
+      addLog(`[Nightmare] 正在下载渲染结果: ${parsed.pathname}`);
+      const getHeaders = token ? { "Authorization": `Bearer ${token}` } : {};
+      const imgRes = await fetch(parsed.toString(), { headers: getHeaders });
+      if (imgRes.ok) {
+        const blob = await imgRes.blob();
+        return await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = reject;
+          fr.readAsDataURL(blob);
+        });
+      } else {
+        addLog(`[Nightmare] 下载图片失败: HTTP ${imgRes.status}`);
+      }
+    } catch (e) {
+      addLog(`[Nightmare] 图片转换异常: ${e?.message || e}`);
+    }
+    return null;
+  }
+
+  // 内部辅助函数：深度提取各种可能结构的图像数据
+  async function parseEventForImage(evt) {
+    if (!evt || typeof evt !== "object") return null;
+
+    if (evt.error) {
+      addLog(`[Nightmare] 节点执行报错: ${evt.error}`);
+    }
+    if (evt.warnings && Array.isArray(evt.warnings)) {
+      evt.warnings.forEach(w => addLog(`[Nightmare] 节点警告: ${w}`));
+    }
+
+    // 1. 直出 Base64 字符串
+    if (typeof evt.image === "string") {
+      if (evt.image.startsWith("data:image") || evt.image.length > 500) {
+        if (evt.width) finalWidth = evt.width;
+        if (evt.height) finalHeight = evt.height;
+        return evt.image.startsWith("data:") ? evt.image : `data:image/png;base64,${evt.image.replace(/\s/g, "")}`;
+      } else {
+        const b64 = await fetchImageAsBase64(evt.image);
+        if (b64) return b64;
+      }
+    }
+
+    // 2. Nightmare 官方原版结构：results: [ { kind: "image", node: "...", w: 512, h: 512, url: "/results/..." } ]
+    const resultsContainer = evt.results || evt.result || evt.outputs;
+    if (resultsContainer) {
+      const list = Array.isArray(resultsContainer) ? resultsContainer : Object.values(resultsContainer);
+      for (const item of list) {
+        if (!item) continue;
+        if (typeof item === "string") {
+          if (item.startsWith("data:image") || item.length > 500) {
+            return item.startsWith("data:") ? item : `data:image/png;base64,${item.replace(/\s/g, "")}`;
+          }
+          const b64 = await fetchImageAsBase64(item);
+          if (b64) return b64;
+        } else if (typeof item === "object") {
+          if (item.w) finalWidth = Number(item.w);
+          if (item.h) finalHeight = Number(item.h);
+          if (item.width) finalWidth = Number(item.width);
+          if (item.height) finalHeight = Number(item.height);
+
+          const targetUrl = item.url || item.path || item.file || item.image;
+          if (targetUrl) {
+            if (typeof targetUrl === "string" && (targetUrl.startsWith("data:image") || targetUrl.length > 500)) {
+              return targetUrl.startsWith("data:") ? targetUrl : `data:image/png;base64,${targetUrl.replace(/\s/g, "")}`;
+            }
+            const b64 = await fetchImageAsBase64(String(targetUrl));
+            if (b64) return b64;
+          }
+        }
+      }
+    }
+
+    // 3. 根级 url / file 属性
+    if (evt.url || evt.file) {
+      const b64 = await fetchImageAsBase64(evt.url || evt.file);
+      if (b64) return b64;
+    }
+
+    return null;
+  }
 
   // 处理 text/event-stream 流式回传
   if (response.body) {
@@ -80214,40 +80303,20 @@ async function requestNightmareImage(baseUrl, token, payload, overrideParams, ta
           if (evt.type === "progress" || evt.step) {
             addLog(`[Nightmare] 端侧生图进度: ${evt.step}/${evt.total_steps || evt.steps || ""}`);
           }
-          if (evt.type === "complete" || evt.event === "done" || evt.image || evt.results) {
-            if (evt.image) {
-              finalImageUrl = evt.image.startsWith("data:") ? evt.image : `data:image/png;base64,${evt.image.replace(/\s/g, "")}`;
-              if (evt.width) finalWidth = evt.width;
-              if (evt.height) finalHeight = evt.height;
-            } else if (evt.results) {
-              const resEntries = Object.entries(evt.results);
-              if (resEntries.length > 0) {
-                const resPath = String(resEntries[0][1]);
-                const fullResUrl = resPath.startsWith("http") ? resPath : (baseUrl + (resPath.startsWith("/") ? "" : "/") + resPath);
-                const imgFetch = await fetch(fullResUrl, { headers });
-                if (imgFetch.ok) {
-                  const blob = await imgFetch.blob();
-                  finalImageUrl = await new Promise((r) => {
-                    const fr = new FileReader();
-                    fr.onload = () => r(fr.result);
-                    fr.readAsDataURL(blob);
-                  });
-                }
-              }
-            }
+          const img = await parseEventForImage(evt);
+          if (img) {
+            finalImageUrl = img;
           }
         } catch (e) {}
       }
     }
   }
 
-  // 兜底直接解析完整 JSON
+  // 兜底直接解析完整 JSON（若响应体非流式）
   if (!finalImageUrl) {
     try {
       const data = await response.json();
-      if (data.image) {
-        finalImageUrl = data.image.startsWith("data:") ? data.image : `data:image/png;base64,${data.image.replace(/\s/g, "")}`;
-      }
+      finalImageUrl = await parseEventForImage(data);
     } catch (e) {}
   }
 
